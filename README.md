@@ -123,7 +123,7 @@ POST /api/auth/login
 Admin panel:
 
 URL:
-http://localhost:5173/admin/login
+http://localhost:5173/admin/login](https://wantace-roof-estimator-snowy.vercel.app/admin/login
 
 
 Email:
