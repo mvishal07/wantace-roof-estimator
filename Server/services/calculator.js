@@ -1,114 +1,217 @@
 const calculateEstimate = (config, answers) => {
-    const questions = config.questions;
-
-    const roofAreaQuestion = questions.find(
-        (question) => question.key === "roof_area"
-    );
-
-    const materialQuestion = questions.find(
-        (question) => question.key === "material"
-    );
-
-    const pitchQuestion = questions.find(
-        (question) => question.key === "pitch"
-    );
-
-    const layersQuestion = questions.find(
-        (question) => question.key === "layers"
-    );
-
-    const storiesQuestion = questions.find(
-        (question) => question.key === "stories"
-    );
-
-    const roofArea = Number(answers.roof_area);
-
-    if (!roofAreaQuestion || !roofArea) {
-        throw new Error("Roof area is required");
+    if (!config || !Array.isArray(config.questions)) {
+        throw new Error("Invalid estimator configuration");
     }
 
-    if (
-        roofArea < roofAreaQuestion.min ||
-        roofArea > roofAreaQuestion.max
-    ) {
-        throw new Error(
-            `Roof area must be between ${roofAreaQuestion.min} and ${roofAreaQuestion.max} sq ft`
+    if (!answers || typeof answers !== "object") {
+        throw new Error("Answers are required");
+    }
+
+    const { questions, modifiers = {} } = config;
+
+
+    const questionMap = Object.fromEntries(
+        questions.map((question) => [question.key, question])
+    );
+
+   
+    const isEnabled = (key) => {
+        return questionMap[key]?.active !== false;
+    };
+
+    const getSelectedOption = (
+        key,
+        errorMessage
+    ) => {
+        const question = questionMap[key];
+
+        if (!question) {
+            throw new Error(
+                `Configuration missing question: ${key}`
+            );
+        }
+
+        if (!isEnabled(key)) {
+            return null;
+        }
+
+        if (!Array.isArray(question.options)) {
+            throw new Error(
+                `Invalid options configuration for ${key}`
+            );
+        }
+
+        const option = question.options.find(
+            (item) => item.value === answers[key]
         );
+
+        if (!option) {
+            throw new Error(errorMessage);
+        }
+
+        return option;
+    };
+
+  
+    let roofArea = 0;
+
+    if (isEnabled("roof_area")) {
+        const roofAreaQuestion =
+            questionMap.roof_area;
+
+        if (!roofAreaQuestion) {
+            throw new Error(
+                "Configuration missing question: roof_area"
+            );
+        }
+
+        roofArea = Number(answers.roof_area);
+
+        if (
+            !Number.isFinite(roofArea) ||
+            roofArea <= 0
+        ) {
+            throw new Error(
+                "Roof area must be a valid positive number"
+            );
+        }
+
+        if (
+            roofArea <
+                Number(roofAreaQuestion.min) ||
+            roofArea >
+                Number(roofAreaQuestion.max)
+        ) {
+            throw new Error(
+                `Roof area must be between ${roofAreaQuestion.min} and ${roofAreaQuestion.max} sq ft`
+            );
+        }
     }
 
-    const material = materialQuestion.options.find(
-        (option) => option.value === answers.material
+  
+
+    const material = getSelectedOption(
+        "material",
+        "Invalid material selection"
     );
 
-    if (!material) {
-        throw new Error("Invalid material selection");
-    }
-
-    const pitch = pitchQuestion.options.find(
-        (option) => option.value === answers.pitch
+ 
+    const pitch = getSelectedOption(
+        "pitch",
+        "Invalid roof pitch"
     );
 
-    if (!pitch) {
-        throw new Error("Invalid roof pitch");
-    }
 
-    const layers = layersQuestion.options.find(
-        (option) => option.value === answers.layers
+    const layers = getSelectedOption(
+        "layers",
+        "Invalid roofing layer selection"
     );
 
-    if (!layers) {
-        throw new Error("Invalid roofing layer selection");
-    }
+    
 
-    const stories = storiesQuestion.options.find(
-        (option) => option.value === answers.stories
+    const stories = getSelectedOption(
+        "stories",
+        "Invalid stories selection"
     );
 
-    if (!stories) {
-        throw new Error("Invalid stories selection");
+   
+
+    const ratePerSqft = material
+        ? Number(material.rate_per_sqft)
+        : 0;
+
+    const wasteFactor = Number(
+        modifiers.waste_factor ?? 0.10
+    );
+
+    const tearOffPerSqft = layers
+        ? Number(layers.tear_off_per_sqft)
+        : 0;
+
+    const pitchMultiplier = pitch
+        ? Number(pitch.multiplier)
+        : 1;
+
+    const storiesMultiplier = stories
+        ? Number(stories.multiplier)
+        : 1;
+
+    const permitFee = Number(
+        modifiers.permit_flat_fee ?? 350
+    );
+
+    const spread =
+        Number(
+            modifiers.range_spread_pct ?? 12
+        ) / 100;
+
+   
+
+    const numericValues = {
+        ratePerSqft,
+        wasteFactor,
+        tearOffPerSqft,
+        pitchMultiplier,
+        storiesMultiplier,
+        permitFee,
+        spread,
+    };
+
+    for (const [key, value] of Object.entries(
+        numericValues
+    )) {
+        if (!Number.isFinite(value)) {
+            throw new Error(
+                `Invalid calculator configuration: ${key}`
+            );
+        }
     }
 
+   
 
     const materialCost =
-        roofArea * material.rate_per_sqft;
-
+        roofArea * ratePerSqft;
 
     const materialWithWaste =
-        materialCost * (1 + config.modifiers.waste_factor);
-
+        materialCost * (1 + wasteFactor);
 
     const tearOffCost =
-        roofArea * layers.tear_off_per_sqft;
+        roofArea * tearOffPerSqft;
 
     const subtotal =
         materialWithWaste + tearOffCost;
 
-
     const pitchAdjusted =
-        subtotal * pitch.multiplier;
+        isEnabled("pitch")
+            ? subtotal * pitchMultiplier
+            : subtotal;
 
+    
 
     const storiesAdjusted =
-        pitchAdjusted * stories.multiplier;
-
+        isEnabled("stories")
+            ? pitchAdjusted * storiesMultiplier
+            : pitchAdjusted;
 
     const baseEstimate =
-        storiesAdjusted + config.modifiers.permit_flat_fee;
+        storiesAdjusted + permitFee;
 
+    
 
-    const spread =
-        config.modifiers.range_spread_pct / 100;
+    const estimateLow = Math.round(
+        baseEstimate * (1 - spread)
+    );
 
-    const estimateLow =
-        Math.round(baseEstimate * (1 - spread));
-
-    const estimateHigh =
-        Math.round(baseEstimate * (1 + spread));
+    const estimateHigh = Math.round(
+        baseEstimate * (1 + spread)
+    );
 
     return {
         estimateLow,
         estimateHigh,
-        baseEstimate: Math.round(baseEstimate),
+        baseEstimate: Math.round(
+            baseEstimate
+        ),
     };
 };
 
